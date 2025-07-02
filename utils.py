@@ -18,8 +18,6 @@ BAD_SUBS = [
     "146",
 ]
 
-INELIGIBLE = ["016", "023", "036", "052", "076", "159"]
-
 
 def find_class_weights(labels: list[int]) -> torch.Tensor:
     class_weights = np.unique(labels, return_counts=True)[1]

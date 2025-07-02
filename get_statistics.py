@@ -29,8 +29,7 @@ timing = args.timing
 folds = [0, 1, 2, 3, 4]  # for cross-validation
 n_bootstrap = 1000
 train_setting, test_setting = args.train_setting, args.test_setting
-ineligible = ["016", "023", "036", "052", "076", "159"]
-groups_path = "/data1/precog_data/eyelink-processed/metadata/groups.json"
+groups_path = "/PATH/TO/eyelink-processed/metadata/groups.json"
 
 data = {}
 for fold_num in folds:
@@ -39,7 +38,6 @@ for fold_num in folds:
         fold_data = json.load(f)
         data.update(fold_data)
 
-data = {k: v for k, v in data.items() if k not in ineligible}
 with open(groups_path) as f:
     groups = json.load(f)
     groups = {k[3:]: int(v) - 1 for k, v in groups.items()}
@@ -205,7 +203,6 @@ for fold_num in folds:
         fold_data = json.load(f)
         perm_data.update(fold_data)
 
-perm_data = {k: v for k, v in perm_data.items() if k not in ineligible}
 perm_data = {k: v for k, v in perm_data.items() if k in intersections}
 mapped_out = {k: [] for k in unique_groups}
 for k, v in perm_data.items():
