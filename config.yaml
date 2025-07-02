@@ -1,0 +1,22 @@
+root: "/PATH/TO/eyelink-processed/"
+task: CvDS  # [CvDS, CvD, CvS, DvS]
+timing: resp  # [resp, read]
+test_fold: 0  # [0, 1, 2, 3, 4]
+device: cuda  # [cuda, cpu]
+name: temp
+
+ntrials: 30
+nlimit: 200
+
+n_splits: 10
+test_size: 0.2
+batch_size: 64
+num_workers: 0
+shuffle: True
+permute: False
+n_classes: 2
+
+lr: 0.0005
+early_stopping: True
+patience: 5
+max_epochs: 100
