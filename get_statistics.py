@@ -1,6 +1,5 @@
 import json, numpy as np
 from sklearn.metrics import (
-    average_precision_score,
     roc_auc_score,
     balanced_accuracy_score,
     f1_score,
@@ -24,7 +23,6 @@ parser.add_argument("--timing", type=str, required=True, choices=["resp", "read"
 args = parser.parse_args()
 
 
-n_seeds = 10
 timing = args.timing
 folds = [0, 1, 2, 3, 4]  # for cross-validation
 n_bootstrap = 1000
@@ -46,51 +44,49 @@ with open(groups_path) as f:
 intersections = set(data.keys()).intersection(groups.keys())
 data = {k: v for k, v in data.items() if k in intersections}
 groups = {k: v for k, v in groups.items() if k in intersections}
-y_true = [groups[subject] for subject in groups]
 
-all_scores = {"ROC-AUC": [], "BAC": [], "F1 Macro": []}
-for seed in range(n_seeds):
-    y_pred = [data[subject][seed] for subject in groups]
-    roc_auc = roc_auc_score(y_true, y_pred)
+# Average across seeds per subject to remove pseudo-replication
+data_avg = {subject: np.mean(preds) for subject, preds in data.items()}
+subjects_list = sorted(data_avg.keys())  # Ensure consistent ordering
+y_true = [groups[subject] for subject in subjects_list]
+y_pred = [data_avg[subject] for subject in subjects_list]
 
-    y_pred_b = [1 if x > 0.5 else 0 for x in y_pred]
-    bac = balanced_accuracy_score(y_true, y_pred_b)
-    f1 = f1_score(y_true, y_pred_b, average="macro")
+# Compute metrics on averaged predictions
+roc_auc = roc_auc_score(y_true, y_pred)
+y_pred_b = [1 if x > 0.5 else 0 for x in y_pred]
+bac = balanced_accuracy_score(y_true, y_pred_b)
+f1 = f1_score(y_true, y_pred_b, average="macro")
 
-    all_scores["ROC-AUC"].append(roc_auc)
-    all_scores["BAC"].append(bac)
-    all_scores["F1 Macro"].append(f1)
-
-# report mean and std
-print(f"\nCross-validation scores [{len(data)} subjects]:\n")
-for k, v in all_scores.items():
-    print(f"{k}: {np.mean(v):.3f} +- {np.std(v):.3f}")
+print(f"\nCross-validation scores [{len(data_avg)} subjects]:\n")
+print(f"ROC-AUC: {roc_auc:.3f}")
+print(f"BAC: {bac:.3f}")
+print(f"F1 Macro: {f1:.3f}")
 
 # use initial groups
 with open(groups_path) as f:
     igroups = json.load(f)
     igroups = {k[3:]: v for k, v in igroups.items() if k[3:] in intersections}
-    iy_true = [int(igroups[k]) - 1 for k in groups.keys()]
+    iy_true = [int(igroups[k]) - 1 for k in data_avg.keys()]
 
-# aggregate scores per subject
-y_pred = [np.mean(data[subject]) for subject in groups]
-boxplotting(y_pred, iy_true, train_setting, test_setting, mode="violin")
+# plot with averaged scores
+y_pred_plot = [data_avg[subject] for subject in data_avg]
+boxplotting(y_pred_plot, iy_true, train_setting, test_setting, mode="violin")
 
 # plot ROC curve
-# save {train_setting: data} to use later
+# save {train_setting: data_avg} to use later
 with open(f"results/roc_{train_setting}2{test_setting}_{timing}.json", "w") as f:
-    json.dump({train_setting: data}, f, indent=4)
+    json.dump({train_setting: data_avg}, f, indent=4)
 
 # load settings: CvDS, CvD, CvS, DvS
 y_pred_dict = {}
 for stting in ["CvDS", "CvD", "CvS", "DvS"]:
     with open(f"results/roc_{stting}2{test_setting}_{timing}.json") as f:
         y_pred_dict.update(json.load(f))
-y_true_dict = {k: groups[k] for k in data}
+y_true_dict = {k: groups[k] for k in data_avg}
 plot_roc_curve(y_pred_dict, y_true_dict, test_setting)
 
-# confidence intervals by bootstrap resampling
-n_subjects = len(data)
+# confidence intervals by bootstrap resampling on subjects (not seeds)
+n_subjects = len(subjects_list)
 bootstrap_scores = {
     "ROC-AUC": [],
     "BAC": [],
@@ -111,59 +107,38 @@ if "D" in test_setting:
 if "S" in test_setting:
     bootstrap_scores["S_proba"] = []
 
-unique_groups = list(set(groups.values()))
-mapped_out = {k: [] for k in unique_groups}
-mapped_out_all = {0: [], 1: [], 2: []}
-for k, v in data.items():
-    if k in groups:
-        mapped_out[groups[k]].extend(v)
-        mapped_out_all[int(igroups[k]) - 1].extend(v)
-
 for _ in range(n_bootstrap):
-    bootstrap_indices = {
-        k: np.random.choice(len(v), len(v), replace=True) for k, v in mapped_out.items()
-    }
-    bootstrap_pred = [mapped_out[k][i] for k, v in bootstrap_indices.items() for i in v]
-    bootstrap_true = [k for k, v in bootstrap_indices.items() for _ in v]
+    # Bootstrap resample subjects (not seed predictions)
+    bootstrap_subjects = np.random.choice(subjects_list, n_subjects, replace=True)
+    
+    # Build bootstrapped y_true and y_pred from averaged predictions
+    boot_y_true = [groups[subject] for subject in bootstrap_subjects]
+    boot_y_pred = [data_avg[subject] for subject in bootstrap_subjects]
+    boot_iy_true = [int(igroups[subject]) - 1 for subject in bootstrap_subjects]
 
-    roc_auc = roc_auc_score(bootstrap_true, bootstrap_pred)
-    pr_auc = average_precision_score(bootstrap_true, bootstrap_pred)
-    sns_at_70 = sns_or_spc(bootstrap_pred, bootstrap_true, target_spc=0.7)
-    spc_at_70 = sns_or_spc(bootstrap_pred, bootstrap_true, target_sns=0.7)
+    roc_auc = roc_auc_score(boot_y_true, boot_y_pred)
+    sns_at_70 = sns_or_spc(boot_y_pred, boot_y_true, target_spc=0.7)
+    spc_at_70 = sns_or_spc(boot_y_pred, boot_y_true, target_sns=0.7)
 
-    bootstrap_pred_b = [1 if x > 0.5 else 0 for x in bootstrap_pred]
-    bac = balanced_accuracy_score(bootstrap_true, bootstrap_pred_b)
-    f1 = f1_score(bootstrap_true, bootstrap_pred_b, average="macro")
-    sensitivity = recall_score(bootstrap_true, bootstrap_pred_b)
-    specificity = recall_score(bootstrap_true, bootstrap_pred_b, pos_label=0)
-    precision = precision_score(bootstrap_true, bootstrap_pred_b)
-    npv = precision_score(bootstrap_true, bootstrap_pred_b, pos_label=0)
-    brier = brier_score_loss(bootstrap_true, bootstrap_pred)
+    boot_y_pred_b = [1 if x > 0.5 else 0 for x in boot_y_pred]
+    bac = balanced_accuracy_score(boot_y_true, boot_y_pred_b)
+    f1 = f1_score(boot_y_true, boot_y_pred_b, average="macro")
+    sensitivity = recall_score(boot_y_true, boot_y_pred_b)
+    specificity = recall_score(boot_y_true, boot_y_pred_b, pos_label=0)
+    precision = precision_score(boot_y_true, boot_y_pred_b)
+    npv = precision_score(boot_y_true, boot_y_pred_b, pos_label=0)
+    brier = brier_score_loss(boot_y_true, boot_y_pred)
 
-    bootstrap_indices_all = {
-        k: np.random.choice(len(v), len(v), replace=True)
-        for k, v in mapped_out_all.items()
-    }
-    bootstrap_pred_all = [
-        mapped_out_all[k][i] for k, v in bootstrap_indices_all.items() for i in v
-    ]
-    bootstrap_true_all = [k for k, v in bootstrap_indices_all.items() for _ in v]
-
+    # Compute group-specific probabilities using initial groups
     if "C" in test_setting:
-        c_proba = np.mean(
-            [x for x, y in zip(bootstrap_pred_all, bootstrap_true_all) if y == 0]
-        )
-        bootstrap_scores["C_proba"].append(c_proba)
+        c_vals = [boot_y_pred[i] for i, y in enumerate(boot_iy_true) if y == 0]
+        bootstrap_scores["C_proba"].append(np.mean(c_vals))
     if "D" in test_setting:
-        d_proba = np.mean(
-            [x for x, y in zip(bootstrap_pred_all, bootstrap_true_all) if y == 1]
-        )
-        bootstrap_scores["D_proba"].append(d_proba)
+        d_vals = [boot_y_pred[i] for i, y in enumerate(boot_iy_true) if y == 1]
+        bootstrap_scores["D_proba"].append(np.mean(d_vals))
     if "S" in test_setting:
-        s_proba = np.mean(
-            [x for x, y in zip(bootstrap_pred_all, bootstrap_true_all) if y == 2]
-        )
-        bootstrap_scores["S_proba"].append(s_proba)
+        s_vals = [boot_y_pred[i] for i, y in enumerate(boot_iy_true) if y == 2]
+        bootstrap_scores["S_proba"].append(np.mean(s_vals))
 
     bootstrap_scores["ROC-AUC"].append(roc_auc)
     bootstrap_scores["BAC"].append(bac)
@@ -203,20 +178,23 @@ for fold_num in folds:
         fold_data = json.load(f)
         perm_data.update(fold_data)
 
+# Average permuted data across seeds per subject
 perm_data = {k: v for k, v in perm_data.items() if k in intersections}
-mapped_out = {k: [] for k in unique_groups}
-for k, v in perm_data.items():
-    if k in groups:
-        mapped_out[groups[k]].extend(v)
+perm_data_avg = {subject: np.mean(preds) for subject, preds in perm_data.items()}
+
+# Ensure permutation data contains same subjects as real data
+perm_subjects = sorted([s for s in subjects_list if s in perm_data_avg])
+if len(perm_subjects) != n_subjects:
+    print(f"Warning: Permutation data has {len(perm_subjects)} subjects vs {n_subjects} in real data")
 
 temp = []
 for _ in range(n_bootstrap):
-    bootstrap_indices = {
-        k: np.random.choice(len(v), len(v), replace=True) for k, v in mapped_out.items()
-    }
-    bootstrap_pred = [mapped_out[k][i] for k, v in bootstrap_indices.items() for i in v]
-    bootstrap_true = [k for k, v in bootstrap_indices.items() for _ in v]
-    roc_auc = roc_auc_score(bootstrap_true, bootstrap_pred)
+    # Bootstrap resample subjects for permutation test
+    bootstrap_subjects = np.random.choice(perm_subjects, len(perm_subjects), replace=True)
+    boot_y_true = [groups[subject] for subject in bootstrap_subjects]
+    boot_y_pred = [perm_data_avg[subject] for subject in bootstrap_subjects]
+    
+    roc_auc = roc_auc_score(boot_y_true, boot_y_pred)
     temp.append(roc_auc)
     if roc_auc > thresh_min:
         exceed_min += 1
